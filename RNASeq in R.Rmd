@@ -333,7 +333,101 @@ ggplot(df_melt[idx_select, ], aes(x = CellType, y = value, fill = CellType)) +
 ```
 
 
+## Correlations
 
+At some point in the analysis, we might want to perform pairwise comparisons between genes. Let's first create a data frame (note that we use the transpose of the countdata matrix).
+
+```{r}
+df <- as.data.frame(t(countdata))
+```
+
+Available variables are in `names(df)`. Plotting the data for two different genes is a good way to identify functionnal relationships between them. Let's pick two genes,
+
+```{r}
+library(ggplot2)
+xvar <- as.name(names(df)[1])
+yvar <- as.name(names(df)[2])
+p <- ggplot(df, aes_string(x=xvar, y=yvar)) + geom_point(alpha = 0.5)
+p
+```
+
+and fit a linear model to the data and compute Pearson's correlation coefficient. 
+
+```{r}
+lm_res <- lm(formula = `20671` ~ `497097`, data = df)
+sm<-summary.lm(lm_res)
+sqrt(sm$r.squared)
+```
+
+Now we want to repeat this for all pairs of genes (we use only the 100 first genes here) and build a correlation matrix
+
+```{r}
+library(Hmisc)
+corr <- Hmisc::rcorr(t(countdata[1:100, ]))
+pheatmap(corr$r, fontsize = 4)
+```
+
+We can explore correlations by constructing a data frame with the correlation corefficient, its associated p-value and the number of points used to compute the correlation
+
+```{r}
+library(reshape2)
+df_R_coeff <- melt(corr$r)
+df_R_coeff$variable <- "R"
+df_pval <- melt(corr$P)
+df_pval$variable <- "P"
+df_nval <- melt(corr$n)
+df_nval$variable <- "n"
+
+df_corr <- rbind(df_R_coeff, df_pval, df_nval)
+df_corr <- dcast(df_corr, Var1 + Var2 ~ variable, mean)
+summary(df_corr)
+```
+
+Now we can filter and keep only the most correlated pairs
+
+```{r}
+df_corr_filtered <- df_corr[!is.na(df_corr$P) & df_corr$n>10 & df_corr$P<0.05 & df_corr$R>0.9, ]
+```
+
+We use that restricted set to build a network.
+
+```{r}
+library(igraph)
+
+net <- igraph::graph.data.frame(df_corr_filtered[ , c("Var1", "Var2")], directed=FALSE)
+net <- igraph::simplify(net)
+clusters <- igraph::cluster_fast_greedy(as.undirected(net))
+group = clusters$membership
+names(group) <- clusters$names
+```
+
+And we render it in an interactive environment
+
+```{r}
+library(networkD3)
+net_d3 <- networkD3::igraph_to_networkD3(net, group = group)
+p <- forceNetwork(Links = net_d3$links, Nodes = net_d3$nodes,
+                  Source = 'source', Target = 'target',
+                  fontFamily = "arial",
+                  NodeID = 'name', Group = 'group',
+                  colourScale = JS("d3.scaleOrdinal(d3.schemeCategory20);"),
+                  charge = -10, opacity = 1,
+                  linkColour = rgb(0.75, 0.75, 0.75),
+                  fontSize = 12, bounded = TRUE, zoom=TRUE, opacityNoHover = 1)
+p
+```
+
+Alternatively, we can save it as a text file and use another software such as *cytoscape* to manipulate this network.
+
+```{r}
+dir.create("./output/")
+write.table(df_corr_filtered, file = "./output/df_corr_filtered.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(data.frame(clusters$membership, clusters$names), file = "./output/group.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+<div class="alert alert-info">
+Exercise: add an extra column `df$score <- 1:length(rownames(df))` that contains a score associated to each sample to our data frame. Which genes most strongly correlate with this score?
+</div>
 
 
 ## Creating a `DESeqDataSet`
