@@ -1,12 +1,15 @@
 ---
 title: "RNA-seq analysis in R - First steps"
-output: 
+always_allow_html: yes
+output:
+  pdf_document:
+    toc: yes
   html_document:
     code_folding: hide
-    toc: true
-    toc_float:
-      toc_collapsed: true
     theme: cerulean
+    toc: yes
+    toc_float:
+      toc_collapsed: yes
 bibliography: ref.bib
 ---
 
@@ -103,6 +106,8 @@ keep <- rowMeans(countdata) >= 10
 countdata <- countdata[keep, ]
 ```
 
+If you want to normalize data and perform differential expression analysis, you can jump to section [Creating a `DESeqDataSet`]
+
 ## Adding annotations
 
 The only information we have about genes is their Entrez Gene ID, which is not very informative. We would like to add some annotation information. There are a number of ways to do this. We will demonstrate how to do this using the org.Mm.eg.db package.
@@ -126,7 +131,7 @@ Let’s double check that the ENTREZID column matches exactly to our countdata r
 table(annot$ENTREZID==rownames(countdata))
 ```
 
-## Data structure
+## Visualization
 
 <div class="alert alert-warning">
 We are working we raw count data in this section. Data normalization and transformation will come later.
@@ -158,6 +163,13 @@ pheatmap(countdata[select,],
          scale = "row",
          labels_row = annot$SYMBOL
          )
+```
+
+If you like interactive objects, you could try the `heatmaply()` function to generate the heatmap. 
+
+```{r}
+library(heatmaply)
+heatmaply(countdata[select,], scale = "row")
 ```
 
 ### PCA
@@ -210,12 +222,11 @@ ggplot(as.data.frame(pca_res$rotation), aes(x=PC1, y=PC2)) +
 ```
 -->
 
-### Other dimensionality reduction methods
 
-Other dimensionality reduction methods such as t-SNE or UMAP are now widely used in addition to PCA.
-Let's see what a t-SNE would look like here. 
 
-```{r}
+Do the same using t-SNE
+
+```{r results="hide", fig.show="hide"}
 library(Rtsne)
 tsne_res <- Rtsne(t(countdata), perplexity = 3)
 df_tsne <- as.data.frame(tsne_res$Y)
@@ -293,15 +304,11 @@ plot
 
 ### Using metadata
 
-Things get more interesting when we include metadata. Let's map sample information to `df_melt` and `df_mean`
+Things get more interesting when we include metadata. Let's map sample information to `df_melt`
 
 ```{r}
 idx_match <- match(df_melt$sample, rownames(sampleinfo))
 df_melt <- cbind(df_melt, sampleinfo[idx_match, ])
-
-idx_match_median <- match(df_median$sample, rownames(sampleinfo))
-df_median <- cbind(df_median, sampleinfo[idx_match_median, ])
-
 ```
 
 Now we have access to two more variables, `CellType` and `Status`, that we could use to form groups.
@@ -312,44 +319,43 @@ ggplot(df_melt, aes(x = CellType, y = value, fill = CellType)) +
   facet_wrap(~Status)
 ```
 
+We can also focus on a particular set of GeneIDs an dsplit plots using `facet_grid`. Let's add an unpaired t-test on top of that.
+
 ```{r}
 library(ggsignif)
-idx_select <- df_melt$GeneID %in% df_melt$GeneID[1:3]
+idx_select <- df_melt$GeneID %in% df_melt$GeneID[1:2]
 ggplot(df_melt[idx_select, ], aes(x = CellType, y = value, fill = CellType)) +
   geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
   geom_point(position = position_jitter(width = 0.25, height = 0))+
-  geom_signif(comparisons = list(1:2), na.rm = TRUE, test = "t.test", position = "identity") +
+  geom_signif(comparisons = list(1:2), na.rm = TRUE, test = "t.test", test.args = list("paired" = FALSE), position = "identity") +
   ylim(c(0,700))+
   facet_grid(GeneID~Status)
 ```
 
 
-Using `df_median` allow us to show the median for each sample.
 
+
+
+## Creating a `DESeqDataSet`
+
+We will use the `DESeq2` package. It should be already installed so we just need to load it in the RStudio session.
 ```{r}
-p <- ggplot(df_median, aes(x = CellType, y = median, fill = CellType)) +
-  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
-  geom_point(position = position_jitter(width = 0.5, height = 0))+
-  facet_wrap(~Status)
-
-p
+library(DESeq2)
 ```
 
-
-We can add a layer showing the result of a t-test between groups: 
+We can use the `help("DESeq2-package")` command to browse the package documentation Rstudio. We will use the `DESeqDataSetFromMatrix` function to build a `DESeqDataSet` object.
 
 ```{r}
-library(ggsignif)
-p <- ggplot(df_median, aes(x = CellType, y = median, fill = CellType)) +
-  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
-  geom_point(position = position_jitter(width = 0.5, height = 0))+
-  geom_signif(comparisons = list(1:2), na.rm = TRUE, test = "t.test", position = "identity") +
-  facet_wrap(~Status)
-p
-
+dds <- DESeqDataSetFromMatrix(countData = countdata,
+                              colData = sampleinfo,
+                              design = ~ CellType + Status)
 ```
 
+The design indicates how to model the samples, i.e how the counts for each gene depend on the variables in `colData = sampleinfo`. Here we want to measure the effect of the cell type and of the pregnancy status of the mice. Note that the two factor variables `CellType` and `Status` should be columns of `sampleinfo`.
+Now the `dds` object contains count data along with the metadata and the experiment design. 
+The count data is obtained using `count(dds)` and the metadata is obtained using `colData(dds)`.
 
+Now that we have a `DESeqDataSet` object, we can analyse the data using the many tools available in the `DESeq2` package. We'll see that it becomes quite straightforward to normalize data and perform differential expression analysis.
 
 
 
