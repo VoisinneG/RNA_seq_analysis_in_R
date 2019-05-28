@@ -1,0 +1,356 @@
+---
+title: "RNA-seq analysis in R - First steps"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    theme: cerulean
+bibliography: ref.bib
+---
+
+```{r , include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Disclaimer
+
+<!-- <div class="alert alert-info"> -->
+The content of this tutorial is largely taken and adapted from the
+<a href="http://combine-australia.github.io/RNAseq-R/">COMBINE RNA-seq Workshop</a> and from the 
+<a href="http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html"> DESeq2 package tutorial</a>.
+We encourage you to visit these webpages to get extra material, including lecture slides and introductory R material if needed.
+<!--  </div> -->
+
+## Setup
+
+If you haven't done so already, you should create a R project to store data, code, output tables and figures in separate sub-folders.
+Just click on "File > New Project..."
+
+<div class="alert alert-info">
+Create a new project. Add directories `./data`, `./R`, `./output` and `./figures`.
+Create a new R script file `script.R` in the `./R` directory. We will use it to copy paste useful command lines below. We can re-run all commands sequentially by clicking on the `source` button in the top right corner of the R studio editor. 
+</div>
+
+## Data
+
+The data for this tutorial comes from a Nature Cell Biology paper, [*EGF-mediated induction of Mcl-1 at the switch to lactation is essential for alveolar cell survival*](http://www.ncbi.nlm.nih.gov/pubmed/25730472) [@Fu2015]. Both the raw data (sequence reads) and processed data (counts) can be downloaded from Gene Expression Omnibus database (GEO) under accession number [GSE60450](http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE60450).
+
+This study examines the expression profiles of basal stem-cell enriched cells (B) and committed luminal cells (L) in the mammary gland of virgin, pregnant and lactating mice. Six groups are present, with one for each combination of cell type and mouse status. Each group contains two biological replicates.
+We will first use the counts file as a starting point for our analysis. <!--  This data has already been aligned to the mouse genome. 
+The command line tool featureCounts [@Liao2014] was used to count reads mapped to mouse genes from Refseq annotation (see the [paper](http://www.ncbi.nlm.nih.gov/pubmed/25730472) for details). -->
+
+Data files are available from: [https://figshare.com/s/1d788fd384d33e913a2a](https://figshare.com/s/1d788fd384d33e913a2a)
+
+<div class="alert alert-info">
+Download the `SampleInfo_Corrected.txt` and `GSE60450_Lactation-GenewiseCounts.txt ` files and place them in a `./data` directory within your project.
+</div>
+
+##Load data
+
+We can now start by loading the data into the RStudio environment.
+
+```{r}
+seqdata <- read.delim("./data/GSE60450_Lactation-GenewiseCounts.txt", stringsAsFactors = FALSE)
+sampleinfo <- read.delim("./data/SampleInfo_Corrected.txt")
+```
+
+You now have two objects in your environment. You can have a look at them using the `head()` or `View()` commands or by double clicking on an object within the environment. The `seqdata` object contains information about genes (one gene per row), the first column has the Entrez gene id, the second has the gene length and the remaining columns contain information about the number of reads aligning to the gene in each experimental sample.
+
+```{r}
+names(seqdata)
+```
+
+The sampleinfo file contains basic information about the samples that we will need for the analysis today.
+
+```{r}
+sampleinfo
+```
+
+## Formatting
+
+We will be manipulating and reformatting the counts matrix into a suitable format for downstream analysis. The first two columns in the `seqdata` dataframe contain annotation information. We need to make a new matrix `countdata` containing only the counts, but we can store the gene identifiers (the `EntrezGeneID` column) as rownames. 
+
+```{r}
+# Remove first two columns from seqdata
+countdata <- seqdata[,-(1:2)]
+# Store EntrezGeneID as rownames
+rownames(countdata) <- seqdata[,1]
+```
+
+The column names of `countdata` are the sample names which are pretty long so we'll shorten these to contain only the relevant information about each sample. We will use the `substr` command to extract the first 7 characters and use these as the colnames.
+
+```{r}
+colnames(countdata) <- substr(colnames(countdata),start=1,stop=7)
+```
+
+Note that the column names are now the same as `SampleName` in the `sampleinfo` file. This is good because it means our sample information in `sampleinfo` is in the same order as the columns in `countdata`. Let's also simplify `sampleinfo` by putting `SampleName` as row names.
+
+```{r}
+rownames(sampleinfo) <- sampleinfo[,2]
+sampleinfo <- sampleinfo[, -(1:2)]
+table(colnames(countdata)==rownames(sampleinfo))
+```
+
+
+## Filtering
+
+Genes with very low counts across all libraries provide little evidence for differential expression and they interfere with some of the statistical approximations that are used later in the pipeline. They also add to the multiple testing burden when estimating false discovery rates, reducing power to detect differentially expressed genes. These genes should be filtered out prior to further analysis. Here we perform a minimal pre-filtering to keep only genes that have at least 10 reads total. 
+
+```{r}
+keep <- rowMeans(countdata) >= 10
+countdata <- countdata[keep, ]
+```
+
+## Adding annotations
+
+The only information we have about genes is their Entrez Gene ID, which is not very informative. We would like to add some annotation information. There are a number of ways to do this. We will demonstrate how to do this using the org.Mm.eg.db package.
+
+First we need to decide what information we want. In order to see what we can extract we can run the columns function on the annotation database.
+
+```{r}
+library(org.Mm.eg.db)
+columns(org.Mm.eg.db)
+```
+
+For now, let's get gene symbols and build up our annotation information in a separate data frame using the select function
+
+```{r}
+annot <- select(org.Mm.eg.db,keys=rownames(countdata),columns=c("ENTREZID","SYMBOL"))
+```
+
+Let’s double check that the ENTREZID column matches exactly to our countdata rownames.
+
+```{r}
+table(annot$ENTREZID==rownames(countdata))
+```
+
+## Data structure
+
+<div class="alert alert-warning">
+We are working we raw count data in this section. Data normalization and transformation will come later.
+</div>
+
+### Heatmap
+
+To explore a count matrix, it is often instructive to look at it as a heatmap. 
+Below we show how to produce such a heatmap. We focus on the 20 genes with the highest average counts.
+
+```{r}
+library("pheatmap")
+select <- order(rowMeans(countdata), decreasing=TRUE)[1:20]
+
+pheatmap(countdata[select,], 
+         cluster_rows=FALSE,
+         cluster_cols=FALSE)
+```
+
+Look up the documentation for `pheatmap` in Rstudio. The parameter `annotation_col` allow us to add annotation columns. We'll also cluster rows and columns , scale values by rows and change row labels using gene symbol.
+
+```{r}
+df <- sampleinfo[ , c("CellType","Status")]
+
+pheatmap(countdata[select,], 
+         show_rownames=TRUE, 
+         cluster_cols=TRUE, 
+         annotation_col=df ,
+         scale = "row",
+         labels_row = annot$SYMBOL
+         )
+```
+
+### PCA
+
+Principal component analyisis (PCA) is a great tool to see the overall "shape" of the data. It allows to identify which samples are similar to one another and which are very different. This can enable us to identify groups of samples that are similar and work out which variables make one group different from another. We use the `prcomp` function to run the PCA. Usually, features (here genes) are columns while observation (here samples) are rows so we'll transpose `countdata` to before running the PCA.
+
+```{r}
+pca_res <- prcomp( t(countdata), center = TRUE, scale. = TRUE)
+summary(pca_res)
+```
+
+You obtain `r ncol(pca_res$x)` principal components, each one explaining a percentage of the total variation in the dataset (PC1 explains `r format(summary(pca_res)$importance[2,1]*100, digits = 0)`%, PC2 `r format(summary(pca_res)$importance[2,2]*100, digits = 0)`% and so on).
+The relationship (correlation or anticorrelation, a.k.a loadings) between the initial variables and the principal components is in `$rotation` while 
+the values of each sample in terms of the principal components is in `$x`. Check taht the row names `pca_res$x` are the same as that of `sampleinfo`:
+
+```{r}
+pca_res$x[ , 1:2]
+
+```
+
+We'll use the `ggplot2` package to plot the results of the PCA. See the [R for data science book](https://r4ds.had.co.nz/data-visualisation.html) for an introduction to ggplot2. We first need to create a data frame from the pca results. 
+
+
+
+```{r hide = TRUE}
+df_pca <- as.data.frame(pca_res$x)
+df_pca$sample <- rownames(df_pca)
+names(df_pca)
+
+```
+
+We can now use the `ggplot()` function and choose to draw one point per sample.
+```{r}
+library(ggplot2)
+library(ggrepel)
+pca_plot <- ggplot(df_pca, aes(x=PC1, y=PC2, color = sample, label=sample)) + 
+  geom_point(show.legend = FALSE) + 
+  geom_text_repel(show.legend = FALSE)
+pca_plot
+```
+
+As an exercise, check that the row names `pca_res$x` are the same as that of `sampleinfo` (check it) and map metadata directly to the `df_pca` dataframe. 
+Color points according to the sample `Status` or `CellType`.
+
+<!-- How would you plot gene loadings on the two first PCs?
+
+```{r}
+ggplot(as.data.frame(pca_res$rotation), aes(x=PC1, y=PC2)) + 
+  geom_point(alpha = 0.25, show.legend = FALSE)
+```
+-->
+
+### Other dimensionality reduction methods
+
+Other dimensionality reduction methods such as t-SNE or UMAP are now widely used in addition to PCA.
+Let's see what a t-SNE would look like here. 
+
+```{r}
+library(Rtsne)
+tsne_res <- Rtsne(t(countdata), perplexity = 3)
+df_tsne <- as.data.frame(tsne_res$Y)
+colnames(df_tsne) <- c("tSNE1", "tSNE2")
+df_tsne$sample <- colnames(countdata)
+
+ggplot(df_tsne, aes(x=tSNE1, y=tSNE2, color = sample, label=sample)) + 
+  geom_point(alpha = 0.25, show.legend = FALSE) + 
+  geom_text_repel(show.legend = FALSE)
+
+```
+
+### Manipulating the data
+
+Data visualization with `ggplot2` works with data frames. Here, we convert our data into a data frame where all count values are stored in the same column named `value` (long format). This will allow us to fully exploit `ggplot2` features.
+
+```{r}
+library(reshape2)
+library(tidyverse)
+df <- countdata
+df$GeneID <- rownames(countdata)
+df_melt <- melt(df, id.vars = "GeneID")
+df_melt <- rename(df_melt,  sample = variable)
+```
+
+As an example, we can now plot the distribution of asinh transformed count values for each sample.
+
+```{r}
+plot <- ggplot(df_melt, aes(x=asinh(value), fill = sample)) + 
+  geom_density(alpha = 0.5)
+plot
+```
+
+Box plots allow to see a summary of these distributions.
+
+```{r}
+library(ggridges)
+
+plot <- ggplot(df_melt, aes(x=sample, y = asinh(value), fill = sample)) + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  geom_boxplot(alpha = 0.5)
+plot
+```
+
+The last two samples seem to differ quite neatly from the other samples. Some normalization between samples will be needed before going further into the analysis.
+
+We use the `dplyr` package to group rows and return group summary (see the corresponding chapter in [R for data science](https://r4ds.had.co.nz/transform.html) ). It makes it easy to compute the median count value per sample.
+
+
+```{r}
+df_median <- 
+  df_melt %>% 
+  group_by(sample) %>% 
+  summarise(median = median(value, na.rm = TRUE))
+
+df_median
+```
+
+Build a data frame with the median and mean count per gene across samples.
+
+See how we can normalize the data using the median:
+```{r}
+df_melt_norm <- 
+  df_melt %>% 
+  group_by(sample) %>% 
+  mutate(value = value/median(value, na.rm = TRUE))
+
+plot <- ggplot(df_melt_norm, aes(x=sample, y = value, fill = sample)) + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  geom_boxplot(alpha = 0.5) +
+  scale_y_log10()
+plot
+
+```
+
+### Using metadata
+
+Things get more interesting when we include metadata. Let's map sample information to `df_melt` and `df_mean`
+
+```{r}
+idx_match <- match(df_melt$sample, rownames(sampleinfo))
+df_melt <- cbind(df_melt, sampleinfo[idx_match, ])
+
+idx_match_median <- match(df_median$sample, rownames(sampleinfo))
+df_median <- cbind(df_median, sampleinfo[idx_match_median, ])
+
+```
+
+Now we have access to two more variables, `CellType` and `Status`, that we could use to form groups.
+
+```{r}
+ggplot(df_melt, aes(x = CellType, y = value, fill = CellType)) +
+  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
+  facet_wrap(~Status)
+```
+
+```{r}
+library(ggsignif)
+idx_select <- df_melt$GeneID %in% df_melt$GeneID[1:3]
+ggplot(df_melt[idx_select, ], aes(x = CellType, y = value, fill = CellType)) +
+  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
+  geom_point(position = position_jitter(width = 0.25, height = 0))+
+  geom_signif(comparisons = list(1:2), na.rm = TRUE, test = "t.test", position = "identity") +
+  ylim(c(0,700))+
+  facet_grid(GeneID~Status)
+```
+
+
+Using `df_median` allow us to show the median for each sample.
+
+```{r}
+p <- ggplot(df_median, aes(x = CellType, y = median, fill = CellType)) +
+  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
+  geom_point(position = position_jitter(width = 0.5, height = 0))+
+  facet_wrap(~Status)
+
+p
+```
+
+
+We can add a layer showing the result of a t-test between groups: 
+
+```{r}
+library(ggsignif)
+p <- ggplot(df_median, aes(x = CellType, y = median, fill = CellType)) +
+  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
+  geom_point(position = position_jitter(width = 0.5, height = 0))+
+  geom_signif(comparisons = list(1:2), na.rm = TRUE, test = "t.test", position = "identity") +
+  facet_wrap(~Status)
+p
+
+```
+
+
+
+
+
+##References
