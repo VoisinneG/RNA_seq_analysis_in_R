@@ -2,14 +2,14 @@
 title: "RNA-seq analysis in R"
 always_allow_html: yes
 output:
-  pdf_document:
-    toc: yes
   html_document:
     code_folding: hide
     theme: cerulean
     toc: yes
     toc_float:
       toc_collapsed: yes
+  pdf_document:
+    toc: yes
 bibliography: ref.bib
 ---
 
@@ -290,8 +290,6 @@ plot
 Box plots allow to see a summary of these distributions.
 
 ```{r}
-library(ggridges)
-
 plot <- ggplot(df_melt, aes(x=sample, y = asinh(value), fill = sample)) + 
   theme(axis.text.x = element_text(angle = 90)) +
   geom_boxplot(alpha = 0.5)
