@@ -615,14 +615,16 @@ Check the `clusterProfiler` documentation if you wish to look at other ontologie
 
 ## GSEA
 
-Complementary to the previous approach, GSEA consists in analyzing how annotations are distributed as a function of an enrichment score.
-Download the gene set file from <a href = "http://software.broadinstitute.org/gsea/msigdb/collections.jsp">here</a>. Several sets can be dowloaded. We choose the Hallmark gene sets with entrez gene ids and save it in `./data`. You should now have a file `h.all.v6.2.symbols.gmt` in the `./data` folder. Let's read it:
+Complementary to the previous approach, GSEA (Gene Set Enrichment Analysis) consists in analyzing how sets of genes of interest (also called "genesets" or "signatures") are distributed along some ranking (i.e. of ratios) between two conditions (i.e. luminal versus basal). 
+It calculates an enrichment score and some statistics (p-value and FDR) for each geneset. 
+Download the gene set file from <a href = "http://software.broadinstitute.org/gsea/msigdb/collections.jsp">here</a>. Several sets can be dowloaded. We choose the Hallmark gene sets with "gene symbols" and save it in `./data`. You should now have a file `h.all.v6.2.symbols.gmt` in the `./data` folder. Let's read it:
 
 ```{r}
+#read the geneset file
 pathwaysH <- read.csv("./data/h.all.v6.2.symbols.gmt", sep="\t", header=F, stringsAsFactor=FALSE)
 ```
 
-We need to do a little formatting before using the `fgsea()` function
+The gene set file needs to be in a specific format so we need to do a little formatting before using the `fgsea()` function:
 
 ```{r}
 #read the geneset file
@@ -639,16 +641,15 @@ names(genesets) <- pathwaysH[[1]]
 ```
 
 We also need to rank genes. We choose to rank them according to the log2 fold-change stored in our `res` object.
+But before that, we need to remove duplicate genes in order to keep only distinct gene symbols. We decide to keep the most regulated ones. 
+
 ```{r}
 ranks <- data.frame(ID = rownames(res), log2FC = res$log2FoldChange)
 idx_match <- match(rownames(res), annot$ENTREZID)
 ranks$symbol <- toupper(annot$SYMBOL[idx_match])
-ranks <- ranks[order(ranks$log2FC, decreasing = TRUE), ]
-```
-
-We keep only disctinct gene symbols (the one with highest FC is kept)
-```{r}
+ranks <- ranks[order(abs(ranks$log2FC), decreasing = TRUE), ]
 ranks <- distinct(ranks, symbol, .keep_all = TRUE)
+ranks <- ranks[order(ranks$log2FC, decreasing = TRUE), ]
 stats <- ranks$log2FC
 names(stats) <- ranks$symbol
 ```
@@ -659,34 +660,38 @@ library(fgsea)
 fgseaRes <- fgsea(pathways = genesets, stats = stats, minSize=15, maxSize = 500, nperm=1000)
 ```
 
-Lets look at the top 10 most enriched gene sets.
+Lets look at the top 10 most enriched gene sets:
+
 ```{r}
 
 topUp <- fgseaRes %>% 
-  filter(ES > 0) %>% 
-  arrange(pval) %>%
+  filter(NES > 0) %>% 
+  arrange(padj, desc(NES)) %>%
   head(10)
   
-topUp %>% dplyr::select(pathway, pval, ES)
+topUp %>% dplyr::select(pathway, padj, NES)
 
 ```
-and the top 10 most depleted gene sets.
+
+and at the top 10 most depleted gene sets :
+
 ```{r}
 topDown <- fgseaRes %>% 
-  filter(ES < 0) %>% 
-  arrange(pval) %>%
+  filter(NES < 0) %>% 
+  arrange(padj, desc(NES)) %>%
   head(10)
 
-topDown %>% dplyr::select(pathway, pval, ES)
+topDown %>% dplyr::select(pathway, padj, NES)
 ```
 
-Let'see how the genes within a pathway are distributed along the ranked genes.
+Let'see how the genes within a pathway are distributed along the ranked genes:
+
 ```{r}
 plotEnrichment(genesets[[topUp$pathway[1]]], stats)
 ```
 
+We can also look at several pathways at once:
 
-We can also look at several pathways at once
 ```{r}
 topPathways <- bind_rows(topUp, topDown) %>% 
   arrange(-ES)
@@ -699,7 +704,7 @@ plotGseaTable(genesets[topPathways$pathway],
 
 
 <div class="alert alert-info">
-Re-run the analysis using the GO MF gene set. What differentiate GSEA from our previous annotation enrichment analysis? Can we make both analysis match?
+Re-run the analysis using the GO MF gene set. What differentiate GSEA from our previous annotation enrichment analysis?
 </div>
 
 ##Additional Material
