@@ -1,0 +1,807 @@
+---
+title: "RNA-seq analysis in R"
+always_allow_html: yes
+output:
+  html_document:
+    code_folding: hide
+    theme: cerulean
+    toc: yes
+    toc_float:
+      toc_collapsed: yes
+  pdf_document:
+    toc: yes
+bibliography: ref.bib
+---
+
+```{r , include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Disclaimer
+
+<!-- <div class="alert alert-info"> -->
+The content of this tutorial is largely taken and adapted from the
+<a href="http://combine-australia.github.io/RNAseq-R/">COMBINE RNA-seq Workshop</a>, and from two tutorials using the DESeq2 package  (
+<a href="http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html"> tutorial 1 </a> and 
+<a href="http://pedagogix-tagc.univ-mrs.fr/courses/ASG1/practicals/rnaseq_diff_Snf2/rnaseq_diff_Snf2.html#differential_analysis_with_deseq2"> tutorial 2 </a>).
+We encourage you to visit these webpages to get extra material, including lecture slides and introductory R material if needed.
+<!--  </div> -->
+
+## Setup
+
+The code used to generate this document along with the data that you will need to reproduce the results presented here are available from the github repository `VoisinneG/RNA_seq_analysis_in_R`
+
+Clone this repository from the terminal with the command:
+```
+git clone "https://github.com/VoisinneG/RNA_seq_analysis_in_R"
+```
+
+First things first : create a R project to store data, code, output tables and figures in separate sub-folders.
+Just click on "File > New Project..."
+
+<div class="alert alert-info">
+Create a new project. Add directories `./data`, `./R`, `./output` and `./figures`.
+Create a new R script file `script.R` in the `./R` directory. We will use it to copy paste useful command lines below. We can re-run all commands sequentially by clicking on the `source` button in the top right corner of the R studio editor. 
+</div>
+
+## Report
+
+You will have to report your analysis in the same format as this document. This document has been built from a **Rmarkdown** file using the `knitr` package. You can download the original `.Rmd` file <a href = "https://github.com/VoisinneG/RNA_seq_analysis_in_R"> here </a> which could provide a useful starting point. You can find more information about **Rmarkdown** on the <a href = "https://rmarkdown.rstudio.com"> official website </a> and in this <a href = "https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf"> cheatsheet </a>.
+
+## Data
+
+The data for this tutorial comes from a Nature Cell Biology paper, [*EGF-mediated induction of Mcl-1 at the switch to lactation is essential for alveolar cell survival*](http://www.ncbi.nlm.nih.gov/pubmed/25730472) [@Fu2015]. Both the raw data (sequence reads) and processed data (counts) can be downloaded from Gene Expression Omnibus database (GEO) under accession number [GSE60450](http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE60450).
+
+This study examines the expression profiles of basal stem-cell enriched cells (B) and committed luminal cells (L) in the mammary gland of virgin, pregnant and lactating mice. Six groups are present, with one for each combination of cell type and mouse status. Each group contains two biological replicates.
+We will first use the counts file as a starting point for our analysis. <!--  This data has already been aligned to the mouse genome. 
+The command line tool featureCounts [@Liao2014] was used to count reads mapped to mouse genes from Refseq annotation (see the [paper](http://www.ncbi.nlm.nih.gov/pubmed/25730472) for details). -->
+
+Data files are available from: [https://figshare.com/s/1d788fd384d33e913a2a](https://figshare.com/s/1d788fd384d33e913a2a)
+
+<div class="alert alert-info">
+Download the `SampleInfo_Corrected.txt` and `GSE60450_Lactation-GenewiseCounts.txt ` files and place them in a `./data` directory within your project. Alternatively, these files are available from the github repository you have just cloned in the `demo_data` folder. You can copy these file in your `./data` folder.
+</div>
+
+##Load data
+
+We can now start by loading the data into the RStudio environment.
+
+```{r}
+seqdata <- read.delim("./demo_data/GSE60450_Lactation-GenewiseCounts.txt", 
+                      stringsAsFactors = FALSE)
+sampleinfo <- read.delim("./demo_data/SampleInfo_Corrected.txt")
+```
+
+You now have two objects in your environment. You can have a look at them using the `head()` or `View()` commands or by double clicking on an object within the environment. The `seqdata` object contains information about genes (one gene per row), the first column has the Entrez gene id, the second has the gene length and the remaining columns contain information about the number of reads aligning to the gene in each experimental sample.
+
+```{r}
+names(seqdata)
+```
+
+The sampleinfo file contains basic information about the samples that we will need for the analysis today.
+
+```{r}
+sampleinfo
+```
+
+## Formatting
+
+We will be manipulating and reformatting the counts matrix into a suitable format for downstream analysis. The first two columns in the `seqdata` dataframe contain annotation information. We need to make a new matrix `countdata` containing only the counts, but we can store the gene identifiers (the `EntrezGeneID` column) as rownames. 
+
+```{r}
+# Remove first two columns from seqdata
+countdata <- seqdata[,-(1:2)]
+# Store EntrezGeneID as rownames
+rownames(countdata) <- seqdata[,1]
+```
+
+The column names of `countdata` are the sample names which are pretty long so we'll shorten these to contain only the relevant information about each sample. We will use the `substr` command to extract the first 7 characters and use these as the colnames.
+
+```{r}
+colnames(countdata) <- substr(colnames(countdata),start=1,stop=7)
+```
+
+Note that the column names are now the same as `SampleName` in the `sampleinfo` file. This is good because it means our sample information in `sampleinfo` is in the same order as the columns in `countdata`. Let's also simplify `sampleinfo` by putting `SampleName` as row names.
+
+```{r}
+rownames(sampleinfo) <- sampleinfo[,2]
+sampleinfo <- sampleinfo[, -(1:2)]
+table(colnames(countdata)==rownames(sampleinfo))
+```
+
+
+## Filtering
+
+Genes with very low counts across all libraries provide little evidence for differential expression and they interfere with some of the statistical approximations that are used later in the pipeline. They also add to the multiple testing burden when estimating false discovery rates, reducing power to detect differentially expressed genes. These genes should be filtered out prior to further analysis. Here we perform a minimal pre-filtering to keep only genes that have at least 1 read total. 
+
+```{r}
+keep <- rowMeans(countdata) >= 1
+countdata <- countdata[keep, ]
+
+```
+
+If you want to normalize data and perform differential expression analysis, you can jump to section [Creating a `DESeqDataSet`]
+
+## Annotations
+
+The only information we have about genes is their Entrez Gene ID, which is not very informative. We would like to add some annotation information. There are a number of ways to do this. We will demonstrate how to do this using the org.Mm.eg.db package.
+
+First we need to decide what information we want. In order to see what we can extract we can run the columns function on the annotation database.
+
+```{r}
+library(org.Mm.eg.db)
+columns(org.Mm.eg.db)
+```
+
+For now, let's get gene symbols and build up our annotation information in a separate data frame using the select function
+
+```{r}
+annot <- select(org.Mm.eg.db,keys=rownames(countdata),columns=c("ENTREZID","SYMBOL"))
+```
+
+Let’s double check that the ENTREZID column matches exactly to our countdata rownames.
+
+```{r}
+table(annot$ENTREZID==rownames(countdata))
+```
+
+## Visualization
+
+<div class="alert alert-warning">
+We are working we raw count data in this section. Data normalization and transformation will come later.
+</div>
+
+### Heatmap
+
+To explore a count matrix, it is often instructive to look at it as a heatmap. 
+Below we show how to produce such a heatmap. We focus on the 20 genes with the highest average counts.
+
+```{r}
+library("pheatmap")
+
+select <- order(rowMeans(countdata), decreasing=TRUE)[1:20]
+
+pheatmap(countdata[select,], 
+         cluster_rows=FALSE,
+         cluster_cols=FALSE)
+```
+
+Look up the documentation for `pheatmap` in Rstudio. The parameter `annotation_col` allow us to add annotation columns. We'll also cluster rows and columns , scale values by rows and change row labels using gene symbol.
+
+```{r}
+pheatmap(countdata[select,], 
+         show_rownames=TRUE, 
+         cluster_cols=TRUE, 
+         annotation_col=sampleinfo[ , c("CellType","Status")] ,
+         scale = "row",
+         labels_row = annot$SYMBOL[select]
+         )
+```
+
+If you like interactive objects, you could try the `heatmaply()` function to generate the heatmap. 
+
+```{r}
+library(heatmaply)
+
+heatmaply(countdata[select,], scale = "row")
+```
+
+### PCA
+
+Principal component analyisis (PCA) is a great tool to see the overall "shape" of the data. It allows to identify which samples are similar to one another and which are very different. This can enable us to identify groups of samples that are similar and work out which variables make one group different from another. We use the `prcomp` function to run the PCA. Usually, features (here genes) are columns while observation (here samples) are rows so we'll transpose `countdata` to before running the PCA.
+
+```{r}
+pca_res <- prcomp( t(countdata), center = TRUE, scale. = TRUE)
+summary(pca_res)
+```
+
+You obtain `r ncol(pca_res$x)` principal components, each one explaining a percentage of the total variation in the dataset (PC1 explains `r format(summary(pca_res)$importance[2,1]*100, digits = 0)`%, PC2 `r format(summary(pca_res)$importance[2,2]*100, digits = 0)`% and so on).
+The relationship (correlation or anticorrelation, a.k.a loadings) between the initial variables and the principal components is in `$rotation`. Let's see which genes have the greatest loadings onto PC1:
+
+```{r}
+idx_up <- order(pca_res$rotation[ , 1], decreasing = TRUE)
+idx_down <- order(pca_res$rotation[ , 1], decreasing = FALSE)
+head(pca_res$rotation[idx_up, 1:2])
+```
+
+Let's look at the count data heatmap for genes with greatest and lowest loadings onto PC1. How does it look for PC2?
+```{r}
+idx_gene <- c(idx_up[1:10], idx_down[1:10])
+pheatmap(countdata[idx_gene, ], 
+         show_rownames=TRUE, 
+         cluster_cols=FALSE, 
+         annotation_col=sampleinfo[ , c("CellType","Status")],
+         scale = "row",
+         labels_row = annot$SYMBOL[idx_gene]
+         )
+
+```
+
+
+
+The values of each sample in terms of the principal components is in `$x`. Check taht the row names `pca_res$x` are the same as that of `sampleinfo`:
+
+```{r}
+pca_res$x[ , 1:2]
+
+```
+
+We'll use the `ggplot2` package to plot the results of the PCA. See the [R for data science book](https://r4ds.had.co.nz/data-visualisation.html) for an introduction to ggplot2. We first need to create a data frame from the pca results. 
+
+
+```{r hide = TRUE}
+df_pca <- as.data.frame(pca_res$x)
+df_pca$sample <- rownames(df_pca)
+names(df_pca)
+
+```
+
+We can now use the `ggplot()` function and choose to draw one point per sample.
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+pca_plot <- ggplot(df_pca, aes(x=PC1, y=PC2, color = sample, label=sample)) + 
+  geom_point(show.legend = FALSE) + 
+  geom_text_repel(show.legend = FALSE)
+pca_plot
+```
+
+As an exercise, check that the row names `pca_res$x` are the same as that of `sampleinfo` (check it) and map metadata directly to the `df_pca` dataframe. 
+Color points according to the sample `Status` or `CellType`.
+
+<!-- How would you plot gene loadings on the two first PCs?
+
+```{r}
+ggplot(as.data.frame(pca_res$rotation), aes(x=PC1, y=PC2)) + 
+  geom_point(alpha = 0.25, show.legend = FALSE)
+```
+-->
+
+Do the same using t-SNE
+
+```{r results="hide", fig.show="hide"}
+library(Rtsne)
+tsne_res <- Rtsne(t(countdata), perplexity = 3)
+df_tsne <- as.data.frame(tsne_res$Y)
+colnames(df_tsne) <- c("tSNE1", "tSNE2")
+df_tsne$sample <- colnames(countdata)
+
+ggplot(df_tsne, aes(x=tSNE1, y=tSNE2, color = sample, label=sample)) + 
+  geom_point(alpha = 0.25, show.legend = FALSE) + 
+  geom_text_repel(show.legend = FALSE)
+
+```
+
+### Manipulating the data
+
+Data visualization with `ggplot2` works with data frames. Here, we convert our data into a data frame where all count values are stored in the same column named `value` (long format). This will allow us to fully exploit `ggplot2` features.
+
+```{r}
+library(reshape2)
+library(tidyverse)
+df <- countdata
+df$GeneID <- rownames(countdata)
+df_melt <- melt(df, id.vars = "GeneID")
+df_melt <- rename(df_melt,  sample = variable)
+```
+
+As an example, we can now plot the distribution of asinh transformed count values for each sample (You can offset histograms for better readability using the `ggridges` package).
+
+```{r}
+plot <- ggplot(df_melt, aes(x=asinh(value), fill = sample)) + 
+  geom_density(alpha = 0.5)
+plot
+```
+
+Box plots allow to see a summary of these distributions.
+
+```{r}
+plot <- ggplot(df_melt, aes(x=sample, y = asinh(value), fill = sample)) + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  geom_boxplot(alpha = 0.5)
+plot
+```
+
+The last two samples seem to differ quite neatly from the other samples. Some normalization between samples will be needed before going further into the analysis.
+
+Here we use the `dplyr` package to group rows and return group summary (see the corresponding chapter in [R for data science](https://r4ds.had.co.nz/transform.html) ). It makes it easy to compute the median count value per sample.
+
+
+```{r}
+df_median <- 
+  df_melt %>% 
+  group_by(sample) %>% 
+  summarise(median = median(value, na.rm = TRUE))
+
+df_median
+```
+
+Build a data frame with the median and mean count per gene across samples.
+
+Normalization will be carried out properly later. Here we show how we can use the `dplyr` package to normalize the data using the median:
+```{r}
+df_melt_norm <- 
+  df_melt %>% 
+  group_by(sample) %>% 
+  mutate(value_norm = value/median(value, na.rm = TRUE))
+
+ggplot(df_melt_norm, aes(x=sample, y = value_norm, fill = sample)) + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  geom_boxplot(alpha = 0.5) +
+  scale_y_log10()
+
+```
+
+### Using metadata
+
+Things get more interesting when we include metadata. Let's map sample information to `df_melt`
+
+```{r}
+idx_match <- match(df_melt$sample, rownames(sampleinfo))
+df_melt <- cbind(df_melt, sampleinfo[idx_match, ])
+```
+
+Now we have access to two more variables, `CellType` and `Status`, that we could use to form groups.
+
+```{r}
+ggplot(df_melt, aes(x = CellType, y = value, fill = CellType)) +
+  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
+  facet_wrap(~Status)
+```
+
+We can also focus on a particular set of GeneIDs and split plots using `facet_grid`. Let's add an unpaired t-test on top of that.
+
+```{r}
+library(ggsignif)
+idx_select <- df_melt$GeneID %in% df_melt$GeneID[1:2]
+ggplot(df_melt[idx_select, ], aes(x = CellType, y = value, fill = CellType)) +
+  geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
+  geom_point(position = position_jitter(width = 0.25, height = 0))+
+  geom_signif(comparisons = list(1:2), 
+              na.rm = TRUE, test = "t.test", 
+              test.args = list("paired" = FALSE), 
+              position = "identity") +
+  ylim(c(0,700))+
+  facet_grid(GeneID~Status)
+```
+
+
+## Correlations
+
+At some point in the analysis, we might want to perform pairwise comparisons between genes. Let's first create a data frame (note that we use the transpose of the countdata matrix so available variables are in `names(df)`).
+
+```{r}
+df <- as.data.frame(t(countdata))
+```
+
+Plotting the data for two different genes is a good way to identify functionnal relationships between them. Let's pick two genes,
+
+```{r}
+library(ggplot2)
+xvar <- as.name(names(df)[1])
+yvar <- as.name(names(df)[2])
+p <- ggplot(df, aes_string(x=xvar, y=yvar)) + geom_point(alpha = 0.5)
+p
+```
+
+and fit a linear model to the data and compute Pearson's correlation coefficient. 
+
+```{r}
+lm_res <- lm(formula = `19888` ~ `497097`, data = df)
+sm<-summary.lm(lm_res)
+sqrt(sm$r.squared)
+```
+
+Now we want to repeat this for all pairs of genes (we use only the 100 first genes here) and build a correlation matrix
+
+```{r}
+library(Hmisc)
+corr <- Hmisc::rcorr(t(countdata[1:100, ]))
+pheatmap(corr$r, fontsize = 4)
+```
+
+We can explore correlations by constructing a data frame with the correlation corefficient, its associated p-value and the number of points used to compute the correlation
+
+```{r}
+library(reshape2)
+df_R_coeff <- melt(corr$r)
+df_R_coeff$variable <- "R"
+df_pval <- melt(corr$P)
+df_pval$variable <- "P"
+df_nval <- melt(corr$n)
+df_nval$variable <- "n"
+
+df_corr <- rbind(df_R_coeff, df_pval, df_nval)
+df_corr <- dcast(df_corr, Var1 + Var2 ~ variable, mean)
+df_corr$gene_name_1 <- annot$SYMBOL[match(df_corr$Var1, annot$ENTREZID)]
+df_corr$gene_name_2 <- annot$SYMBOL[match(df_corr$Var2, annot$ENTREZID)]
+df_corr <- df_corr[df_corr$Var1 != df_corr$Var2, ]
+  
+```
+
+We can look at the whole correlation data frame using the interactive function `datatable`. It is convenient if you wish to search for certain variables or order results.
+```{r}
+library(DT)
+DT::datatable(df_corr)
+```
+
+Now we can filter and keep only the most correlated pairs
+
+```{r}
+df_corr_filtered <- df_corr[!is.na(df_corr$P) & df_corr$n>10 & df_corr$P<0.05 & df_corr$R>0.9, ]
+```
+
+We use that restricted set to build a network.
+
+```{r}
+library(igraph)
+
+net <- igraph::graph.data.frame(df_corr_filtered[ , c("gene_name_1", "gene_name_2")], directed=FALSE)
+net <- igraph::simplify(net)
+clusters <- igraph::cluster_fast_greedy(as.undirected(net))
+group = clusters$membership
+names(group) <- clusters$names
+```
+
+And we render it in an interactive environment
+
+```{r}
+library(networkD3)
+net_d3 <- networkD3::igraph_to_networkD3(net, group = group)
+p <- forceNetwork(Links = net_d3$links, Nodes = net_d3$nodes,
+                  Source = 'source', Target = 'target',
+                  fontFamily = "arial",
+                  NodeID = 'name', Group = 'group',
+                  colourScale = JS("d3.scaleOrdinal(d3.schemeCategory20);"),
+                  charge = -10, opacity = 1,
+                  linkColour = rgb(0.75, 0.75, 0.75),
+                  fontSize = 12, bounded = TRUE, zoom=TRUE, opacityNoHover = 1)
+p
+```
+
+Alternatively, we can save it as a text file and use another software such as *cytoscape* to manipulate this network.
+
+```{r}
+dir.create("./output/")
+write.table(df_corr_filtered, file = "./output/df_corr_filtered.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(data.frame(clusters$membership, clusters$names), file = "./output/group.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+<div class="alert alert-info">
+Exercise: add an extra column `df$score <- 1:length(rownames(df))` that contains a score associated to each sample to our data frame. Which genes most strongly correlate with this score?
+</div>
+
+##Differential expression
+
+### Creating a `DESeqDataSet`
+
+We will use the `DESeq2` package to conduct the core steps of the analysis. It should be already installed so we just need to load it in the RStudio session.
+```{r}
+library(DESeq2)
+```
+
+We can use the `help("DESeq2-package")` command to browse the package documentation in Rstudio. We will use the `DESeqDataSetFromMatrix` function to build a `DESeqDataSet` object.
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = countdata,
+                              colData = sampleinfo,
+                              design = ~ CellType + Status)
+```
+
+The design indicates how to model the samples, i.e how the counts for each gene depend on the variables in `colData = sampleinfo`. Here we want to measure the effect of the cell type and of the pregnancy status of the mice. Note that the two factor variables `CellType` and `Status` should be columns of `sampleinfo`.
+Now the `dds` object contains count data along with the metadata and the experiment design. 
+The count data is obtained using `counts(dds)` and the metadata is obtained using `colData(dds)`.
+
+Now that we have a `DESeqDataSet` object, we can analyse the data using the many tools available in the `DESeq2` package. 
+
+###Differential expression analyis
+
+The standard differential expression analysis steps are wrapped into a single function, `DESeq`. It is then straightforward to perform differential expression analysis. 
+
+```{r}
+dds <- DESeq(dds)
+```
+We can see the comparisons carried out by DESeq using `resultsNames()`.
+```{r}
+resultsNames(dds)
+```
+
+Results tables are generated using the function `results`, which extracts a results table with log2 fold changes, p values and adjusted p values. 
+We specify which coomparison we want to extract using the `name` parameter. Here we choose to compare basal and luminal cell types.
+We select significant results with adjusted p-values (correction for multiple tests computed with the Benjamini–Hochberg procedure) below 0.01 using `alpha`.
+
+```{r}
+res <- results(dds, alpha = 0.001, pAdjustMethod="BH", name="CellType_luminal_vs_basal")
+head(res)
+```
+
+We can get a summary of these results using `summary()` 
+
+```{r}
+summary(res)
+```
+
+Let's select genes have an a adjusted p-value lower than `0.001` and a fold-change greater than `2^5`:
+```{r}
+enrich <- data.frame(ID=rownames(res), res@listData)
+
+enrich  <- enrich  %>% 
+  filter(padj < 0.001, log2FoldChange > 5) %>%
+  arrange(desc(log2FoldChange))
+
+enrich %>% head(10)
+```
+
+Have a look at the most enriched gene
+
+```{r}
+d <- plotCounts(dds, gene=as.character(enrich$ID[1]), intgroup=c("CellType","Status"), 
+                returnData=TRUE)
+library("ggplot2")
+p <- ggplot(d, aes(x=CellType, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + 
+  scale_y_log10()
+p
+```
+
+We can also facet the plot according to `Status`. It could be interesting to see how the `CellType` effect depends on `Status`. See section [Interactions] to address such questions.
+
+```{r}
+p + facet_wrap(~Status)
+```
+
+We have used default parameters here. Data normalization and model fitting have been performed in the background by DESeq. If you want to perform  these steps separately, have a look at the [Additional Material] section.
+
+###Interactions
+Interaction terms allow to test, for example, if the log2 fold change attributable to a given condition is different based on another factor, for example if the `CellType` effect differs across `Status`.
+
+Interaction terms can be added to the design formula but a simpler approach to take into account interactions consists in:
+-combining the factors of interest into a single factor with all combinations of the original factors
+-changing the design to include just this factor, e.g. ~ group
+
+```{r}
+dds.int <- dds
+dds.int$group <- factor(paste(dds.int$Status, dds.int$CellType, sep="."))
+design(dds.int) <- ~ group
+dds.int <- DESeq(dds.int)
+```
+
+Now we can compare basal and luminal cell types within the lactate status.
+```{r}
+res.int <- results(dds.int, contrast = c("group", "lactate.basal", "lactate.luminal"))
+res.int
+```
+
+###Visualizing results
+
+####MA-plot
+In DESeq2, the function plotMA shows the log2 fold changes attributable to a given variable over the mean of normalized counts for all the samples in the DESeqDataSet.
+
+```{r}
+plotMA(res, ylim=c(-5, 5))
+```
+
+####Volcano plot
+Volcano plots allow to visualize p-values and fold-change. We add gene names for a set of selected genes
+```{r}
+df<-as.data.frame(res@listData)
+df$ID <- res@rownames
+df$names <- annot$SYMBOL[match(df$ID, annot$ENTREZID)]
+select <- df$log2FoldChange > 2.5 & log10(df$pvalue) < -100
+ggplot(df, aes(x=log2FoldChange, y=-log10(pvalue), label = names)) + 
+  geom_point(alpha = 0.1) +
+  geom_text_repel(data = df[select, ], color = "red", min.segment.length = 0)
+```
+
+## Annotation enrichment analysis
+
+Now that we have identified a set of genes that are differentially expressed between basal and luminal conditions, we can use available gene annotations to figure out whether this set of genes is enriched in terms corresponding to specific biological processes, molecular functions or pathways. We'll use the `clusterProfiler` package to perform this analysis on GO annotation terms corresponding to molecular functions (GO MF ontology).
+
+```{r}
+library(clusterProfiler)
+enrichgo_result_over_MF = enrichGO( gene = df$ID[select],
+                            universe = df$ID,
+                            OrgDb = org.Mm.eg.db,
+                            ont = "MF",
+                            pvalueCutoff = 0.05,
+                            qvalueCutoff = 0.2,
+                            readable = TRUE)
+
+```
+
+Results are stored in the `result` slot
+
+```{r}
+datatable( enrichgo_result_over_MF@result )
+```
+
+Check the `clusterProfiler` documentation if you wish to look at other ontologies.
+
+## GSEA
+
+Complementary to the previous approach, GSEA (Gene Set Enrichment Analysis) consists in analyzing how sets of genes of interest (also called "genesets" or "signatures") are distributed along some ranking (i.e. of ratios) between two conditions (i.e. luminal versus basal). 
+It calculates an enrichment score and some statistics (p-value and FDR) for each geneset. 
+Download the gene set file from <a href = "http://software.broadinstitute.org/gsea/msigdb/collections.jsp">here</a>. Several sets can be dowloaded. We choose the Hallmark gene sets with "gene symbols" and save it in `./data`. You should now have a file `h.all.v6.2.symbols.gmt` in the `./data` folder. Let's read it:
+
+```{r}
+#read the geneset file
+pathwaysH <- read.csv("./data/h.all.v6.2.symbols.gmt", sep="\t", header=F, stringsAsFactor=FALSE)
+```
+
+The gene set file needs to be in a specific format so we need to do a little formatting before using the `fgsea()` function:
+
+```{r}
+#read the geneset file
+# the format is different than when we do: load("human_H_v5p2.rdata")
+# this causes a problem. 
+genesets <- lapply( 1:nrow(pathwaysH), function(x){
+  row <- pathwaysH[x, ]
+  current_string =  paste( unlist( row[ 3:length( row)], use.names = FALSE), collapse="\t")
+  current_string <- gsub("[\t]+$","", current_string)
+  current_string <- strsplit(current_string, split="\t")[[1]]
+  return(current_string)}
+)
+names(genesets) <- pathwaysH[[1]]
+```
+
+We also need to rank genes. We choose to rank them according to the log2 fold-change stored in our `res` object.
+But before that, we need to remove duplicate genes in order to keep only distinct gene symbols. We decide to keep the most regulated ones. 
+
+```{r}
+ranks <- data.frame(ID = rownames(res), log2FC = res$log2FoldChange)
+idx_match <- match(rownames(res), annot$ENTREZID)
+ranks$symbol <- toupper(annot$SYMBOL[idx_match])
+ranks <- ranks[order(abs(ranks$log2FC), decreasing = TRUE), ]
+ranks <- distinct(ranks, symbol, .keep_all = TRUE)
+ranks <- ranks[order(ranks$log2FC, decreasing = TRUE), ]
+stats <- ranks$log2FC
+names(stats) <- ranks$symbol
+```
+
+Run GSEA
+```{r}
+library(fgsea)
+fgseaRes <- fgsea(pathways = genesets, stats = stats, minSize=15, maxSize = 500, nperm=1000)
+```
+
+Lets look at the top 10 most enriched gene sets:
+
+```{r}
+
+topUp <- fgseaRes %>% 
+  filter(NES > 0) %>% 
+  arrange(padj, desc(NES)) %>%
+  head(10)
+  
+topUp %>% dplyr::select(pathway, padj, NES)
+
+```
+
+and at the top 10 most depleted gene sets :
+
+```{r}
+topDown <- fgseaRes %>% 
+  filter(NES < 0) %>% 
+  arrange(padj, desc(NES)) %>%
+  head(10)
+
+topDown %>% dplyr::select(pathway, padj, NES)
+```
+
+Let'see how the genes within a pathway are distributed along the ranked genes:
+
+```{r}
+plotEnrichment(genesets[[topUp$pathway[1]]], stats)
+```
+
+We can also look at several pathways at once:
+
+```{r}
+topPathways <- bind_rows(topUp, topDown) %>% 
+  arrange(-ES)
+
+plotGseaTable(genesets[topPathways$pathway], 
+              stats, 
+              fgseaRes, 
+              gseaParam = 0.5)
+```
+
+
+<div class="alert alert-info">
+Re-run the analysis using the GO MF gene set. What differentiate GSEA from our previous annotation enrichment analysis?
+</div>
+
+##Additional Material
+
+### Normalization
+
+Normalization is performed using `estimateSizeFactors`. This function first normalize rows by the geometric mean and returns the median value for each column.
+```{r}
+dds.norm <-  estimateSizeFactors(dds)
+sizeFactors(dds)
+```
+
+Normalized data can now be retrieved using `counts(dds.norm, normalized=TRUE)`. Let's see what the normalized data looks like:
+
+```{r}
+library(reshape2)
+library(ggplot2)
+df_norm  <- as.data.frame(counts(dds.norm, normalized=TRUE))
+df_norm [["GeneID"]] <- rownames(df_norm )
+df_melt_norm <- melt(df_norm , id.vars = "GeneID")
+df_melt_norm <- dplyr::rename(df_melt_norm,  sample = variable)
+
+ggplot(df_melt_norm, aes(x=sample, y = asinh(value), fill = sample)) + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  geom_boxplot(alpha = 0.5)
+
+ggplot(df_melt_norm, aes(x = asinh(value), fill = sample)) + 
+  geom_density(alpha = 0.5)
+```
+
+
+###Mean-variance relationship
+
+As you can see from the following plot the relationship between variance and mean is not linear as would be the case for a Poisson distribution (red line).
+
+```{r}
+## Computing mean and variance
+df_norm <- as.data.frame( counts(dds.norm, normalized=TRUE) )
+mean <- apply(df_norm, 1, mean, na.rm = TRUE)
+variance <- apply(df_norm, 1, var, na.rm = TRUE)
+
+df_norm$log10_mean <- log10(mean)
+df_norm$log10_variance <- log10(variance)
+
+
+p1<-ggplot(df_norm, aes(x=log10_mean, y=log10_variance)) + 
+  geom_hex(bins=100) +
+  scale_fill_viridis_c()+
+  annotate("segment", x = -1, y = -1, xend = 6, yend=6, color = "red")
+
+p1
+```
+
+###Modelling read counts through a negative binomial
+
+To perform diffential expression call DESeq will assume that, for each gene, the read counts are generated by a negative binomial distribution. One problem here will be to estimate, for each gene, the two parameters of the negative binomial distribution: mean and dispersion.
+
+-The mean will be estimated from the observed normalized counts in both conditions.
+-The first step will be to compute a gene-wise dispersion. When the number of available samples is insufficient to obtain a reliable estimator of the variance for each gene, DESeq will apply a shrinkage strategy, which assumes that counts produced by genes with similar expression level (counts) have similar variance (note that this is a strong assumption). DESeq will regress the gene-wise dispersion onto the means of the normalized counts to obtain an estimate of the dispersion that will be subsequently used to build the binomial model for each gene.
+Performing estimation of dispersion parameter and display a diagnostic plot
+
+```{r}
+## Performing estimation of dispersion parameter
+dds.disp <- estimateDispersions(dds.norm)
+
+## A diagnostic plot which
+## shows the mean of normalized counts (x axis)
+## and dispersion estimate for each genes
+plotDispEsts(dds.disp)
+```
+
+###Performing differential expression
+
+Now that a negative binomial model has been fitted for each gene, the nbinomWaldTest can be used to test for differential expression. 
+```{r}
+dds.wald <- nbinomWaldTest(dds.disp)
+resultsNames(dds.wald)
+```
+
+As before, we can see the result table. We keep only results with adjusted p-values (correction for multiple tests computed with the Benjamini–Hochberg procedure) below 0.01 using `alpha`.
+
+```{r}
+res.wald <- results(dds.wald, alpha=0.01, pAdjustMethod="BH", name = "CellType_luminal_vs_basal")
+summary(res.wald)
+```
+
+```{r}
+head(res.wald)
+```
+
+
+
+
+
+##References

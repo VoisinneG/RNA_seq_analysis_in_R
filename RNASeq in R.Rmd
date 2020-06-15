@@ -29,7 +29,14 @@ We encourage you to visit these webpages to get extra material, including lectur
 
 ## Setup
 
-If you haven't done so already, you should create a R project to store data, code, output tables and figures in separate sub-folders.
+The code used to generate this document along with the data that you will need to reproduce the results presented here are available from the github repository `VoisinneG/RNA_seq_analysis_in_R`
+
+Clone this repository from the terminal with the command:
+```
+git clone "https://github.com/VoisinneG/RNA_seq_analysis_in_R"
+```
+
+First things first : create a R project to store data, code, output tables and figures in separate sub-folders.
 Just click on "File > New Project..."
 
 <div class="alert alert-info">
@@ -52,7 +59,7 @@ The command line tool featureCounts [@Liao2014] was used to count reads mapped t
 Data files are available from: [https://figshare.com/s/1d788fd384d33e913a2a](https://figshare.com/s/1d788fd384d33e913a2a)
 
 <div class="alert alert-info">
-Download the `SampleInfo_Corrected.txt` and `GSE60450_Lactation-GenewiseCounts.txt ` files and place them in a `./data` directory within your project.
+Download the `SampleInfo_Corrected.txt` and `GSE60450_Lactation-GenewiseCounts.txt ` files and place them in a `./data` directory within your project. Alternatively, these files are available from the github repository you have just cloned in the `demo_data` folder. You can copy these file in your `./data` folder.
 </div>
 
 ##Load data
@@ -60,9 +67,9 @@ Download the `SampleInfo_Corrected.txt` and `GSE60450_Lactation-GenewiseCounts.t
 We can now start by loading the data into the RStudio environment.
 
 ```{r}
-seqdata <- read.delim("./data/GSE60450_Lactation-GenewiseCounts.txt", 
+seqdata <- read.delim("./data/S16082_allresV2_rawdata.csv", 
                       stringsAsFactors = FALSE)
-sampleinfo <- read.delim("./data/SampleInfo_Corrected.txt")
+sampleinfo <- read.delim("./data/Sample_Info.csv")
 ```
 
 You now have two objects in your environment. You can have a look at them using the `head()` or `View()` commands or by double clicking on an object within the environment. The `seqdata` object contains information about genes (one gene per row), the first column has the Entrez gene id, the second has the gene length and the remaining columns contain information about the number of reads aligning to the gene in each experimental sample.
@@ -83,7 +90,8 @@ We will be manipulating and reformatting the counts matrix into a suitable forma
 
 ```{r}
 # Remove first two columns from seqdata
-countdata <- seqdata[,-(1:2)]
+idx_remove <- which(! names(seqdata) %in% sampleinfo$sample.id)
+countdata <- seqdata[,-idx_remove]
 # Store EntrezGeneID as rownames
 rownames(countdata) <- seqdata[,1]
 ```
@@ -91,7 +99,7 @@ rownames(countdata) <- seqdata[,1]
 The column names of `countdata` are the sample names which are pretty long so we'll shorten these to contain only the relevant information about each sample. We will use the `substr` command to extract the first 7 characters and use these as the colnames.
 
 ```{r}
-colnames(countdata) <- substr(colnames(countdata),start=1,stop=7)
+#colnames(countdata) <- substr(colnames(countdata),start=1,stop=7)    
 ```
 
 Note that the column names are now the same as `SampleName` in the `sampleinfo` file. This is good because it means our sample information in `sampleinfo` is in the same order as the columns in `countdata`. Let's also simplify `sampleinfo` by putting `SampleName` as row names.
