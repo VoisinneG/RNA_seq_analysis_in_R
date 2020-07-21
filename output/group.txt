@@ -1,0 +1,14 @@
+clusters.membership	clusters.names
+1	Csn1s2b
+1	Fabp3
+1	Glycam1
+3	Tnfsf11
+1	Wap
+2	Trim9
+1	Lao1
+2	Skint7
+2	Skint8
+4	Zglp1
+4	Tmsb15b2
+3	Cstdc5
+3	Gm15772
