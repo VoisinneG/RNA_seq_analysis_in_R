@@ -432,7 +432,7 @@ Now we want to repeat this for all pairs of genes (we use only a subset of genes
 
 ```{r}
 library(Hmisc)
-idx_select<- order(max_loading, decreasing = TRUE)[1:50]
+idx_select<- order(max_loading, decreasing = TRUE)[1:20]
 corr <- Hmisc::rcorr(t(data.norm.log[idx_select, ]))
 pheatmap(corr$r, fontsize = 4)
 ```
