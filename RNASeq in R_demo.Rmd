@@ -650,7 +650,7 @@ ggplot(df, aes(x=log2FoldChange, y=-log10(padj), label = names)) +
 
 ## Annotation enrichment analysis
 
-Now that we have identified a set of genes that are differentially expressed between basal and luminal conditions, we can use available gene annotations to figure out whether this set of genes is enriched in terms corresponding to specific biological processes, molecular functions or pathways. We'll use the `clusterProfiler` package to perform this analysis on GO annotation terms corresponding to molecular functions (GO MF ontology).
+Now that we have identified a set of genes that are differentially expressed between basal and luminal conditions, we can use available gene annotations to figure out whether this set of genes is enriched in terms corresponding to specific biological processes, molecular functions or pathways. We'll use the `clusterProfiler` package to perform this analysis on GO annotation terms corresponding to biological processes (GO BP ontology).
 
 ```{r}
 library(clusterProfiler)
@@ -663,7 +663,7 @@ select <- df$log2FoldChange > 2.5 & log10(df$padj) < -100
 enrichgo_result_over_MF = enrichGO( gene = df$ID[select], keyType = "ENTREZID",
                             universe = df$ID,
                             OrgDb = org.Mm.eg.db,
-                            ont = "MF",
+                            ont = "BP",
                             pvalueCutoff = 0.05,
                             qvalueCutoff = 0.2,
                             readable = TRUE)
