@@ -17,6 +17,27 @@ bibliography: ref.bib
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 ```
 
+```{r}
+# Project and experiment path
+#PATH_PROJECT = "/mnt/NAS7/PNlab/BIOINFO_PROJECT/WorkshopCMI"
+PATH_PROJECT = "~/WorkshopCMI"
+EXPERIMENT_NAME = "CrohnSamples"
+
+#### Input / Output
+
+# Input folder path
+PATH_RAW_DATA = file.path( PATH_PROJECT, EXPERIMENT_NAME, "00_RawData")
+
+# Output folder path
+#PATH_EXPERIMENT_OUTPUT = file.path( PATH_PROJECT, EXPERIMENT_NAME, "05_Output")
+
+# The file containing the gene expression per sample
+PATH_RAW_EXPRESSION_FILE = file.path( PATH_RAW_DATA, "S16082_allresV2_CrohnOnly_RawOnly.csv")
+
+# The file containing the meta-data on the samples
+PATH_METADATA_FILE = file.path( PATH_RAW_DATA, "CROHNSamples_Info_withNA.csv")
+```
+
 
 
 <div class="alert alert-info">
@@ -56,9 +77,11 @@ Read count data and sample metadata files are available from the github reposito
 We can now start by loading the data into the RStudio environment.
 
 ```{r}
-seqdata <- read.delim("./data/S16082_allresV2_rawdata.csv", 
-                      stringsAsFactors = FALSE)
-sampleinfo <- read.delim("./data/Sample_Info.csv")
+
+seqdata <- read.delim(PATH_RAW_EXPRESSION_FILE, stringsAsFactors = FALSE, sep = ";")
+sampleinfo <- read.delim(PATH_METADATA_FILE)
+library(dplyr)
+sampleinfo <- dplyr::rename(sampleinfo, sampleName = replicate.name)
 ```
 
 You now have two objects in your environment. You can have a look at them using the `head()` or `View()` commands or by double clicking on an object within the environment. The `seqdata` object contains information about genes (one gene per row), the first column has the Entrez gene id, the second has the gene length and the remaining columns contain information about the number of reads aligning to the gene in each experimental sample.
@@ -86,11 +109,10 @@ rownames(countdata) <- seqdata[,1]
 ```
 
 
-Note that the column names are now the same as `SampleName` in the `sampleinfo` file. This is good because it means our sample information in `sampleinfo` is in the same order as the columns in `countdata`. Let's also simplify `sampleinfo` by putting `SampleName` as row names.
+Note that the column names are now the same as `sampleName` in the `sampleinfo` file. This is good because it means our sample information in `sampleinfo` is in the same order as the columns in `countdata`. Let's also simplify `sampleinfo` by putting `SampleName` as row names.
 
 ```{r}
-rownames(sampleinfo) <- sampleinfo[,1]
-sampleinfo <- sampleinfo[, -1]
+rownames(sampleinfo) <- sampleinfo$sampleName
 table(colnames(countdata)==rownames(sampleinfo))
 ```
 
@@ -124,6 +146,8 @@ annot <- AnnotationDbi::select(org.Hs.eg.db, keys=keys(org.Hs.eg.db), columns=c(
 idx_match <- match(row.names(countdata), annot$ENSEMBL)
 annot <- annot[idx_match, ]
 rownames(annot) <- rownames(countdata)
+annot$GeneName <- seqdata$GeneName[match(rownames(annot), seqdata$EnsemblGeneId)]
+
 ```
 
 Let’s check that the ENSEMBL column matches the countdata rownames.
@@ -165,7 +189,7 @@ Look up the documentation for `pheatmap` in Rstudio. The parameter `annotation_c
 pheatmap(log10(countdata[select,]+1), 
          show_rownames=TRUE, 
          cluster_cols=TRUE, 
-         annotation_col=sampleinfo[ , c("Treatment","Status")] ,
+         annotation_col=sampleinfo[ , c("condition.name","sexe")] ,
          scale = "row",
          labels_row = annot$Gene_name[select]
          )
@@ -174,9 +198,8 @@ pheatmap(log10(countdata[select,]+1),
 If you like interactive objects, you could try the `heatmaply()` function to generate the heatmap. 
 
 ```{r}
-library(heatmaply)
-
-heatmaply(log10(countdata[select,]+1), scale = "row")
+#library(heatmaply)
+#heatmaply(log10(countdata[select,]+1), scale = "row")
 ```
 
 
@@ -259,18 +282,20 @@ data.norm.log <- data.norm.log[-1]
 Things get more interesting when we include metadata. Let's map sample information to `df_melt`
 
 ```{r}
+metavar <- c("condition.name", "sexe")
 idx_match <- match(df_melt$sample, rownames(sampleinfo))
-df_melt$Status <- sampleinfo$Status[idx_match]
-df_melt$Treatment <- sampleinfo$Treatment[idx_match]
+for( var in metavar){
+  df_melt[[var]] <- sampleinfo[[var]][idx_match]
+}
 ```
 
 
-Now we have access to two more variables, `Treatment` and `Status`, that we could use to form groups.
+Now we have access to two more variables, `sexe` and `condition.name`, that we could use to form groups.
 
 ```{r}
-ggplot(df_melt, aes(x = Treatment, y = value_norm_log, fill = Treatment)) +
+ggplot(df_melt, aes(x = sexe, y = value_norm_log, fill =sexe)) +
   geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
-  facet_wrap(~Status)
+  facet_wrap(~condition.name)
 ```
 
 We can also focus on a particular set of GeneIDs and split plots using `facet_grid`. Let's add an unpaired t-test on top of that.
@@ -280,7 +305,7 @@ library(ggsignif)
 idx_select <- df_melt$GeneID %in% df_melt$GeneID[1]
 
 
-ggplot(df_melt[idx_select, ], aes(x = Treatment, y = value_norm_log, fill = Treatment)) +
+ggplot(df_melt[idx_select, ], aes(x = sexe, y = value_norm_log, fill = sexe)) +
   geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
   geom_point(position = position_jitter(width = 0.25, height = 0))+
   scale_y_continuous(expand = expand_scale(add=1)) +
@@ -288,7 +313,7 @@ ggplot(df_melt[idx_select, ], aes(x = Treatment, y = value_norm_log, fill = Trea
               na.rm = TRUE, test = "t.test", 
               test.args = list("paired" = FALSE), 
               position = "identity") +
-  facet_grid(GeneID~Status)
+  facet_grid(GeneID~condition.name)
 ```
 
 ## QC - Sample correlation matrix
@@ -300,7 +325,7 @@ data.norm.log <- dcast(df_melt, GeneID ~ sample, value.var = "value_norm_log")
 rownames(data.norm.log) <- data.norm.log$GeneID
 data.norm.log <- data.norm.log[-1]
 corr_mat = cor( data.norm.log )
-heatmaply(corr_mat)
+pheatmap(corr_mat)
 ```
 
 Let'look more in more details at two samples :
@@ -341,7 +366,7 @@ Let's look at the heatmap for these genes:
 
 pheatmap(data.norm.log[idx_select, ],
          show_rownames=TRUE,
-         annotation_col=sampleinfo[ , c("Treatment","Status")],
+         annotation_col=sampleinfo[ , c("sexe","condition.name")],
          annotation_row = annotation_row,
          labels_row = annot$Gene_name[ match(rownames(data.norm.log)[idx_select], rownames(annot))]
 )
@@ -358,7 +383,7 @@ rownames(annotation_row) <- rownames(data.norm.log)[idx_select]
 
 pheatmap(data.norm.log[idx_select, ],
          show_rownames=TRUE,
-         annotation_col=sampleinfo[ , c("Treatment","Status")],
+         annotation_col=sampleinfo[ , c("sexe","condition.name")],
          annotation_row = annotation_row,
          labels_row = annot$Gene_name[ match(rownames(data.norm.log)[idx_select], rownames(annot))]
 )
@@ -392,7 +417,7 @@ pca_plot
 ```
 
 As an exercise, check that the row names `pca_res$x` are the same as that of `sampleinfo` (check it) and map metadata directly to the `df_pca` dataframe. 
-Color points according to the sample `Status` or `Treatment`.
+Color points according to the sample `condition.name` or `sexe`.
 
 <!-- How would you plot gene loadings on the two first PCs?
 
@@ -522,10 +547,10 @@ We can use the `help("DESeq2-package")` command to browse the package documentat
 ```{r}
 dds <- DESeqDataSetFromMatrix(countData = countdata,
                               colData = sampleinfo,
-                              design = ~ Treatment + Status)
+                              design = ~ sexe + condition.name)
 ```
 
-The design indicates how to model the samples, i.e how the counts for each gene depend on the variables in `colData = sampleinfo`. Here we want to measure the effect of the cell type and of the pregnancy status of the mice. Note that the two factor variables `Treatment` and `Status` should be columns of `sampleinfo`.
+The design indicates how to model the samples, i.e how the counts for each gene depend on the variables in `colData = sampleinfo`. Here we want to measure the effect of the cell type and of the pregnancy condition.name of the mice. Note that the two factor variables `sexe` and `condition.name` should be columns of `sampleinfo`.
 Now the `dds` object contains count data along with the metadata and the experiment design. 
 The count data is obtained using `counts(dds)` and the metadata is obtained using `colData(dds)`.
 
@@ -548,7 +573,7 @@ We specify which coomparison we want to extract using the `name` parameter. Here
 We select significant results with adjusted p-values (correction for multiple tests computed with the Benjamini–Hochberg procedure) below 0.01 using `alpha`.
 
 ```{r}
-res <- results(dds, alpha = 0.05, pAdjustMethod="BH", name="Status_quiescent_vs_active")
+res <- results(dds, alpha = 0.05, pAdjustMethod="BH", name="condition.name_quiescent_vs_active")
 head(res)
 ```
 
@@ -573,28 +598,28 @@ Have a look at the most enriched gene
 
 ```{r}
 #get normalized data
-d <- plotCounts(dds, gene=as.character(enrich$ID[1]), intgroup=c("Treatment","Status"), 
+d <- plotCounts(dds, gene=as.character(enrich$ID[1]), intgroup=c("sexe","condition.name"), 
                 returnData=TRUE)
 
 library("ggplot2")
-p <- ggplot(d, aes(x=Status, y=log10(count+1))) + 
+p <- ggplot(d, aes(x=condition.name, y=log10(count+1))) + 
   geom_point(position=position_jitter(w=0.1,h=0))  +
-  facet_wrap(~Treatment)
+  facet_wrap(~sexe)
 p
 ```
 
-We can also facet the plot according to `Status`. It could be interesting to see how the `Treatment` effect depends on `Status`. See section [Interactions] to address such questions.
+We can also facet the plot according to `condition.name`. It could be interesting to see how the `sexe` effect depends on `condition.name`. See section [Interactions] to address such questions.
 
 ```{r}
-ggplot(d, aes(x=Treatment, y=log10(count+1))) + 
+ggplot(d, aes(x=sexe, y=log10(count+1))) + 
   geom_point(position=position_jitter(w=0.1,h=0))  +
-  facet_wrap(~Status)
+  facet_wrap(~condition.name)
 ```
 
 We have used default parameters here. Data normalization and model fitting have been performed in the background by DESeq. If you want to perform  these steps separately, have a look at the [Additional Material] section.
 
 ### Interactions
-Interaction terms allow to test, for example, if the log2 fold change attributable to a given condition is different based on another factor, for example if the `Treatment` effect differs across `Status`.
+Interaction terms allow to test, for example, if the log2 fold change attributable to a given condition is different based on another factor, for example if the `sexe` effect differs across `condition.name`.
 
 Interaction terms can be added to the design formula but a simpler approach to take into account interactions consists in:
 -combining the factors of interest into a single factor with all combinations of the original factors
@@ -602,13 +627,13 @@ Interaction terms can be added to the design formula but a simpler approach to t
 
 ```{r}
 dds.int <- dds
-dds.int$group <- factor(paste(dds.int$Status, dds.int$Treatment, sep="."))
+dds.int$group <- factor(paste(dds.int$condition.name, dds.int$sexe, sep="."))
 design(dds.int) <- ~ group
 dds.int <- DESeq(dds.int)
 resultsNames(dds.int)
 ```
 
-Now we can compare active and quiescent patients that received the TNF treatment.
+Now we can compare active and quiescent patients that received the TNF sexe.
 ```{r}
 #res.int <- results(dds.int, contrast = c("group", "active.TNF", "quiescent.TNF"))
 res.int <- results(dds.int, contrast = c("group", "active.NT", "quiescent.NT"))
@@ -618,12 +643,12 @@ res.int
 Alternatively, you can create another object keeping only the samples you want to compare :
 
 ```{r}
-samples <- rownames(sampleinfo)[sampleinfo$Status %in% c("quiescent", "active") & 
-                                  sampleinfo$Treatment == "NT"]
+samples <- rownames(sampleinfo)[sampleinfo$condition.name %in% c("quiescent", "active") & 
+                                  sampleinfo$sexe == "NT"]
 
 dds.focus <- DESeqDataSetFromMatrix(countData = countdata[,samples],
                               colData = sampleinfo[rownames(sampleinfo) %in% samples, ],
-                              design = ~ Status)
+                              design = ~ condition.name)
 
 dds.focus <- DESeq(dds.focus)
 resultsNames(dds.focus)
