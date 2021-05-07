@@ -1,9 +1,0 @@
-clusters.membership	clusters.names
-2	REG1A
-1	RPS4Y1
-1	ZFY
-1	LINC00278
-1	TXLNGY
-2	REG1B
-1	DDX3Y
-1	TTTY14
