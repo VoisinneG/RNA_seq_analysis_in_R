@@ -17,6 +17,18 @@ bibliography: ref.bib
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 ```
 
+
+## Setup
+
+The code used to generate this document is available from the github repository `VoisinneG/RNA_seq_analysis_in_R`
+
+Clone this repository from the terminal with the command:
+```
+git clone "https://github.com/VoisinneG/RNA_seq_analysis_in_R"
+```
+
+We define below the paths to the different folders used to store the raw data, databases, code and output files.
+
 ```{r}
 # Project and experiment path
 #PATH_PROJECT = "/mnt/NAS7/PNlab/BIOINFO_PROJECT/WorkshopCMI"
@@ -28,8 +40,11 @@ EXPERIMENT_NAME = "CrohnSamples"
 # Input folder path
 PATH_RAW_DATA = file.path( PATH_PROJECT, EXPERIMENT_NAME, "00_RawData")
 
+# Reference folder path
+PATH_REFERENCE = file.path( PATH_PROJECT, EXPERIMENT_NAME, "01_Reference")
+
 # Output folder path
-#PATH_EXPERIMENT_OUTPUT = file.path( PATH_PROJECT, EXPERIMENT_NAME, "05_Output")
+PATH_EXPERIMENT_OUTPUT = file.path( PATH_PROJECT, EXPERIMENT_NAME, "05_Output")
 
 # The file containing the gene expression per sample
 PATH_RAW_EXPRESSION_FILE = file.path( PATH_RAW_DATA, "S16082_allresV2_CrohnOnly_RawOnly.csv")
@@ -39,45 +54,15 @@ PATH_METADATA_FILE = file.path( PATH_RAW_DATA, "CROHNSamples_Info_withNA.csv")
 ```
 
 
-
-<div class="alert alert-info">
-We adapt here the tutorial with demo data (see file `RNASeq_in_R_demo.html`) to study a 'real' scenario.
-</div>
-
-## Setup
-
-The code used to generate this document along with the data that you will need to reproduce the results presented here are available from the github repository `VoisinneG/RNA_seq_analysis_in_R`
-
-Clone this repository from the terminal with the command:
-```
-git clone "https://github.com/VoisinneG/RNA_seq_analysis_in_R"
-```
-
-First things first : create a R project to store data, code, output tables and figures in separate sub-folders.
-Just click on "File > New Project..."
-
-<div class="alert alert-info">
-Create a new project. Add directories `./data`, `./R`, `./output` and `./figures`.
-Create a new R script file `script.R` in the `./R` directory. We will use it to copy paste useful command lines below. We can re-run all commands sequentially by clicking on the `source` button in the top right corner of the R studio editor. 
-</div>
-
 ## Report
 
 You will have to report your analysis in the same format as this document. This document has been built from a **Rmarkdown** file using the `knitr` package. You can download the original `.Rmd` file <a href = "https://github.com/VoisinneG/RNA_seq_analysis_in_R"> here </a> which could provide a useful starting point. You can find more information about **Rmarkdown** on the <a href = "https://rmarkdown.rstudio.com"> official website </a> and in this <a href = "https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf"> cheatsheet </a>.
-
-## Data
-
-
-<div class="alert alert-info">
-Read count data and sample metadata files are available from the github repository you have just cloned in the `data` folder. You can copy these file in your `./data` folder.
-</div>
 
 ## Load data
 
 We can now start by loading the data into the RStudio environment.
 
 ```{r}
-
 seqdata <- read.delim(PATH_RAW_EXPRESSION_FILE, stringsAsFactors = FALSE, sep = ";")
 sampleinfo <- read.delim(PATH_METADATA_FILE)
 library(dplyr)
@@ -93,7 +78,7 @@ names(seqdata)
 The sampleinfo file contains basic information about the samples that we will need for the analysis today.
 
 ```{r}
-sampleinfo
+head(sampleinfo[, 1:10])
 ```
 
 ## Formatting
@@ -146,7 +131,7 @@ annot <- AnnotationDbi::select(org.Hs.eg.db, keys=keys(org.Hs.eg.db), columns=c(
 idx_match <- match(row.names(countdata), annot$ENSEMBL)
 annot <- annot[idx_match, ]
 rownames(annot) <- rownames(countdata)
-annot$GeneName <- seqdata$GeneName[match(rownames(annot), seqdata$EnsemblGeneId)]
+
 
 ```
 
@@ -158,7 +143,7 @@ table(annot$ENSEMBL==rownames(countdata))
 
 You might have noticed that some symbols appear as NA. That is because there is not a one-to-one match between EntrezID and Ensembl gene IDs. Gene names are also in seqdata, so we'll use these instead.
 ```{r}
-annot$Gene_name <- seqdata$Gene_name[match(rownames(annot), seqdata$Ensembl.gene.id)]
+annot$GeneName <- seqdata$GeneName[match(rownames(annot), seqdata$EnsemblGeneId)]
 ```
 
 ## Visualization 
@@ -171,12 +156,16 @@ We are working we raw count data in this section. Data normalization and transfo
 ### Heatmap
 
 To explore a count matrix, it is often instructive to look at it as a heatmap. 
-Below we show how to produce such a heatmap. We focus on the 20 genes with the highest average counts.
+Below we show how to produce such a heatmap. We focus on the 20 genes with the highest standard deviation.
 
 ```{r}
 library("pheatmap")
 
-select <- order(rowMeans(countdata), decreasing=TRUE)[1:20]
+sd_per_gene <- apply(X = log10(countdata + 1), MARGIN = 1, FUN = sd)
+GeneID_high_sd <- names(sd_per_gene[order(sd_per_gene, decreasing = TRUE)[1:20]]) 
+#select <- order(rowMeans(countdata), decreasing=TRUE)[1:20]
+
+select <- GeneID_high_sd
 
 pheatmap(log10(countdata[select,]+1),
          cluster_rows=FALSE,
@@ -189,17 +178,10 @@ Look up the documentation for `pheatmap` in Rstudio. The parameter `annotation_c
 pheatmap(log10(countdata[select,]+1), 
          show_rownames=TRUE, 
          cluster_cols=TRUE, 
-         annotation_col=sampleinfo[ , c("condition.name","sexe")] ,
+         annotation_col=sampleinfo[ , c("Status","Treatment", "sexe")] ,
          scale = "row",
-         labels_row = annot$Gene_name[select]
+         labels_row = annot[select, ]$GeneName
          )
-```
-
-If you like interactive objects, you could try the `heatmaply()` function to generate the heatmap. 
-
-```{r}
-#library(heatmaply)
-#heatmaply(log10(countdata[select,]+1), scale = "row")
 ```
 
 
@@ -213,13 +195,14 @@ library(dplyr)
 df <- countdata
 df$GeneID <- rownames(countdata)
 df_melt <- melt(df, id.vars = "GeneID")
-df_melt <- rename(df_melt,  sample = variable)
+df_melt <- dplyr::rename(df_melt,  sample = variable)
 
 ```
 
 As an example, we can now plot the distribution of log10+1 transformed count values for each sample (You can offset histograms for better readability using the `ggridges` package).
 
 ```{r}
+library(ggplot2)
 plot <- ggplot(df_melt, aes(x=log10(value+1), fill = sample)) + 
   geom_density(alpha = 0.5)
 plot
@@ -282,7 +265,7 @@ data.norm.log <- data.norm.log[-1]
 Things get more interesting when we include metadata. Let's map sample information to `df_melt`
 
 ```{r}
-metavar <- c("condition.name", "sexe")
+metavar <- names(sampleinfo)
 idx_match <- match(df_melt$sample, rownames(sampleinfo))
 for( var in metavar){
   df_melt[[var]] <- sampleinfo[[var]][idx_match]
@@ -290,12 +273,12 @@ for( var in metavar){
 ```
 
 
-Now we have access to two more variables, `sexe` and `condition.name`, that we could use to form groups.
+Now we have access all metadata variables, for instrance `Treatment`, `Status` and `sexe`, that we could use to form groups.
 
 ```{r}
 ggplot(df_melt, aes(x = sexe, y = value_norm_log, fill =sexe)) +
   geom_bar(alpha = 0.5, stat = "summary", fun.y = "median", position = "dodge") + 
-  facet_wrap(~condition.name)
+  facet_wrap(~Status+Treatment)
 ```
 
 We can also focus on a particular set of GeneIDs and split plots using `facet_grid`. Let's add an unpaired t-test on top of that.
@@ -313,7 +296,7 @@ ggplot(df_melt[idx_select, ], aes(x = sexe, y = value_norm_log, fill = sexe)) +
               na.rm = TRUE, test = "t.test", 
               test.args = list("paired" = FALSE), 
               position = "identity") +
-  facet_grid(GeneID~condition.name)
+  facet_grid(GeneID~Status)
 ```
 
 ## QC - Sample correlation matrix
@@ -332,6 +315,7 @@ Let'look more in more details at two samples :
 
 ```{r}
 library(ggpointdensity)
+library(viridis)
 
 ggplot(data.norm.log, aes_string(x = rownames(sampleinfo)[3], y = rownames(sampleinfo)[4])) + 
     geom_pointdensity(size = 0.3, alpha = 0.1 ) + 
@@ -366,9 +350,9 @@ Let's look at the heatmap for these genes:
 
 pheatmap(data.norm.log[idx_select, ],
          show_rownames=TRUE,
-         annotation_col=sampleinfo[ , c("sexe","condition.name")],
+         annotation_col=sampleinfo[ , c("Treatment","Status", "sexe")],
          annotation_row = annotation_row,
-         labels_row = annot$Gene_name[ match(rownames(data.norm.log)[idx_select], rownames(annot))]
+         labels_row = annot$GeneName[ match(rownames(data.norm.log)[idx_select], rownames(annot))]
 )
 
 ```
@@ -376,23 +360,25 @@ pheatmap(data.norm.log[idx_select, ],
 You can also select genes with the highest positive and negative loadings on a given PC:
 
 ```{r}
-idx_select<- c(order(pca_res$rotation[, 1], decreasing = TRUE)[1:10],
+idx_select <- c(order(pca_res$rotation[, 1], decreasing = TRUE)[1:10],
                order(pca_res$rotation[, 1], decreasing = FALSE)[1:10])
+GeneId_select <- rownames(pca_res$rotation)[idx_select]
+
 annotation_row <- data.frame(pc = c(rep("up", 10), rep("down", 10) ))
-rownames(annotation_row) <- rownames(data.norm.log)[idx_select]
+rownames(annotation_row) <- GeneId_select
 
 pheatmap(data.norm.log[idx_select, ],
          show_rownames=TRUE,
-         annotation_col=sampleinfo[ , c("sexe","condition.name")],
+         annotation_col=sampleinfo[ , c("Treatment","Status", "sexe")],
          annotation_row = annotation_row,
-         labels_row = annot$Gene_name[ match(rownames(data.norm.log)[idx_select], rownames(annot))]
+         labels_row = annot$GeneName[ match(GeneId_select, rownames(annot))]
 )
 ```
 
 The values of each sample in terms of the principal components is in `$x`. Check taht the row names `pca_res$x` are the same as that of `sampleinfo`:
 
 ```{r}
-pca_res$x[ , 1:2]
+head(pca_res$x[ , 1:2])
 ```
 
 We'll use the `ggplot2` package to plot the results of the PCA. See the [R for data science book](https://r4ds.had.co.nz/data-visualisation.html) for an introduction to ggplot2. We first need to create a data frame from the pca results. 
@@ -417,7 +403,7 @@ pca_plot
 ```
 
 As an exercise, check that the row names `pca_res$x` are the same as that of `sampleinfo` (check it) and map metadata directly to the `df_pca` dataframe. 
-Color points according to the sample `condition.name` or `sexe`.
+Color points according to the sample `Status` or `Treatment`.
 
 <!-- How would you plot gene loadings on the two first PCs?
 
@@ -457,9 +443,14 @@ Now we want to repeat this for all pairs of genes (we use only a subset of genes
 
 ```{r}
 library(Hmisc)
-idx_select<- order(max_loading, decreasing = TRUE)[1:20]
-corr <- Hmisc::rcorr(t(data.norm.log[idx_select, ]))
-pheatmap(corr$r, fontsize = 4)
+
+selected_ids <- GeneID_high_sd
+
+corr <- Hmisc::rcorr(t(data.norm.log[selected_ids, ]))
+df_corr <- corr$r
+rownames(df_corr) <- annot$GeneName[match(selected_ids, rownames(annot))]
+colnames(df_corr) <- annot$GeneName[match(selected_ids, rownames(annot))]
+pheatmap(df_corr, fontsize = 8)
 ```
 
 We can explore correlations by constructing a data frame with the correlation corefficient, its associated p-value and the number of points used to compute the correlation
@@ -475,8 +466,8 @@ df_nval$variable <- "n"
 
 df_corr <- rbind(df_R_coeff, df_pval, df_nval)
 df_corr <- dcast(df_corr, Var1 + Var2 ~ variable, mean)
-df_corr$gene_name_1 <- annot$Gene_name[match(df_corr$Var1, rownames(annot))]
-df_corr$gene_name_2 <- annot$Gene_name[match(df_corr$Var2, rownames(annot))]
+df_corr$gene_name_1 <- annot$GeneName[match(df_corr$Var1, rownames(annot))]
+df_corr$gene_name_2 <- annot$GeneName[match(df_corr$Var2, rownames(annot))]
 df_corr <- df_corr[df_corr$Var1 != df_corr$Var2, ]
   
 ```
@@ -490,7 +481,7 @@ DT::datatable(df_corr)
 Now we can filter and keep only the most correlated pairs
 
 ```{r}
-df_corr_filtered <- df_corr[!is.na(df_corr$P) & df_corr$n>10 & df_corr$P<0.05 & df_corr$R>0.9, ]
+df_corr_filtered <- df_corr[!is.na(df_corr$P) & df_corr$n>10 & df_corr$P<0.05 & abs(df_corr$R)>0.9, ]
 ```
 
 We use that restricted set to build a network.
@@ -524,9 +515,9 @@ p
 Alternatively, we can save it as a text file and use another software such as *cytoscape* to manipulate this network.
 
 ```{r}
-dir.create("./output/")
-write.table(df_corr_filtered, file = "./output/df_corr_filtered.txt", sep = "\t", row.names = FALSE, quote = FALSE)
-write.table(data.frame(clusters$membership, clusters$names), file = "./output/group.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+dir.create(PATH_EXPERIMENT_OUTPUT)
+write.table(df_corr_filtered, file = paste0(PATH_EXPERIMENT_OUTPUT, "/df_corr_filtered.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(data.frame(clusters$membership, clusters$names), file = paste0(PATH_EXPERIMENT_OUTPUT, "/group.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 ```
 
 <div class="alert alert-info">
@@ -547,10 +538,10 @@ We can use the `help("DESeq2-package")` command to browse the package documentat
 ```{r}
 dds <- DESeqDataSetFromMatrix(countData = countdata,
                               colData = sampleinfo,
-                              design = ~ sexe + condition.name)
+                              design = ~ Treatment + Status)
 ```
 
-The design indicates how to model the samples, i.e how the counts for each gene depend on the variables in `colData = sampleinfo`. Here we want to measure the effect of the cell type and of the pregnancy condition.name of the mice. Note that the two factor variables `sexe` and `condition.name` should be columns of `sampleinfo`.
+The design indicates how to model the samples, i.e how the counts for each gene depend on the variables in `colData = sampleinfo`. Here we want to measure the effect of the cell type and of the pregnancy Status of the mice. Note that the two factor variables `Treatment` and `Status` should be columns of `sampleinfo`.
 Now the `dds` object contains count data along with the metadata and the experiment design. 
 The count data is obtained using `counts(dds)` and the metadata is obtained using `colData(dds)`.
 
@@ -573,7 +564,7 @@ We specify which coomparison we want to extract using the `name` parameter. Here
 We select significant results with adjusted p-values (correction for multiple tests computed with the Benjamini–Hochberg procedure) below 0.01 using `alpha`.
 
 ```{r}
-res <- results(dds, alpha = 0.05, pAdjustMethod="BH", name="condition.name_quiescent_vs_active")
+res <- results(dds, alpha = 0.05, pAdjustMethod="BH", name="Status_Quiescent_vs_Active")
 head(res)
 ```
 
@@ -598,28 +589,28 @@ Have a look at the most enriched gene
 
 ```{r}
 #get normalized data
-d <- plotCounts(dds, gene=as.character(enrich$ID[1]), intgroup=c("sexe","condition.name"), 
+d <- plotCounts(dds, gene=as.character(enrich$ID[1]), intgroup=c("Treatment","Status"), 
                 returnData=TRUE)
 
 library("ggplot2")
-p <- ggplot(d, aes(x=condition.name, y=log10(count+1))) + 
+p <- ggplot(d, aes(x=Status, y=log10(count+1))) + 
   geom_point(position=position_jitter(w=0.1,h=0))  +
-  facet_wrap(~sexe)
+  facet_wrap(~Treatment)
 p
 ```
 
-We can also facet the plot according to `condition.name`. It could be interesting to see how the `sexe` effect depends on `condition.name`. See section [Interactions] to address such questions.
+We can also facet the plot according to `Status`. It could be interesting to see how the `Treatment` effect depends on `Status`. See section [Interactions] to address such questions.
 
 ```{r}
-ggplot(d, aes(x=sexe, y=log10(count+1))) + 
+ggplot(d, aes(x=Treatment, y=log10(count+1))) + 
   geom_point(position=position_jitter(w=0.1,h=0))  +
-  facet_wrap(~condition.name)
+  facet_wrap(~Status)
 ```
 
 We have used default parameters here. Data normalization and model fitting have been performed in the background by DESeq. If you want to perform  these steps separately, have a look at the [Additional Material] section.
 
 ### Interactions
-Interaction terms allow to test, for example, if the log2 fold change attributable to a given condition is different based on another factor, for example if the `sexe` effect differs across `condition.name`.
+Interaction terms allow to test, for example, if the log2 fold change attributable to a given condition is different based on another factor, for example if the `Treatment` effect differs across `Status`.
 
 Interaction terms can be added to the design formula but a simpler approach to take into account interactions consists in:
 -combining the factors of interest into a single factor with all combinations of the original factors
@@ -627,32 +618,38 @@ Interaction terms can be added to the design formula but a simpler approach to t
 
 ```{r}
 dds.int <- dds
-dds.int$group <- factor(paste(dds.int$condition.name, dds.int$sexe, sep="."))
+dds.int$group <- factor(paste(dds.int$Status, dds.int$Treatment, sep="."))
 design(dds.int) <- ~ group
 dds.int <- DESeq(dds.int)
 resultsNames(dds.int)
 ```
 
-Now we can compare active and quiescent patients that received the TNF sexe.
+Now we can compare active and quiescent patients that received the TNF Treatment.
 ```{r}
-#res.int <- results(dds.int, contrast = c("group", "active.TNF", "quiescent.TNF"))
-res.int <- results(dds.int, contrast = c("group", "active.NT", "quiescent.NT"))
+#res.int <- results(dds.int, contrast = c("group", "Active.TNF", "Quiescent.TNF"))
+res.int <- results(dds.int, contrast = c("group", "Active.NT", "Quiescent.NT"))
 res.int
 ```
 
 Alternatively, you can create another object keeping only the samples you want to compare :
 
 ```{r}
-samples <- rownames(sampleinfo)[sampleinfo$condition.name %in% c("quiescent", "active") & 
-                                  sampleinfo$sexe == "NT"]
+samples <- rownames(sampleinfo)[sampleinfo$Status %in% c("Quiescent", "Active") & 
+                                  sampleinfo$Treatment == "NT"]
 
 dds.focus <- DESeqDataSetFromMatrix(countData = countdata[,samples],
                               colData = sampleinfo[rownames(sampleinfo) %in% samples, ],
-                              design = ~ condition.name)
+                              design = ~ Status)
 
 dds.focus <- DESeq(dds.focus)
 resultsNames(dds.focus)
 ```
+```{r}
+results(dds.focus, contrast = c("Status", "Active", "Quiescent"))
+```
+
+Note that the results differ slighlty between the two approaches. Do you have an idea why that is the case?
+
 
 ### Visualizing results
 
@@ -668,7 +665,7 @@ Volcano plots allow to visualize p-values and fold-change. We add gene names for
 ```{r}
 df <- as.data.frame(res.int@listData)
 df$ID <- res.int@rownames
-df$names <- annot$Gene_name[match(df$ID, rownames(annot))]
+df$names <- annot$GeneName[match(df$ID, rownames(annot))]
 select <- abs(df$log2FoldChange) > 2 & df$padj < 0.05
 ggplot(df, aes(x=log2FoldChange, y=-log10(padj), label = names)) + 
   geom_point(color = "gray") +
@@ -686,7 +683,7 @@ library(clusterProfiler)
 
 df <- as.data.frame(res.int@listData)
 df$ID <- res.int@rownames
-df$names <- annot$Gene_name[match(df$ID, rownames(annot))]
+df$names <- annot$GeneName[match(df$ID, rownames(annot))]
 select <- abs(df$log2FoldChange) > 2 & df$padj < 0.05
 
 enrichgo_result_over_MF = enrichGO( gene = df$ID[select], 
@@ -717,6 +714,9 @@ enrichgo_result_over_KEGG = enrichKEGG( gene = df$EntrezID[select], organism = "
                                     qvalueCutoff = 0.2)
 ```
 
+```{r}
+datatable( enrichgo_result_over_KEGG@result )
+```
 
 ## GSEA
 
@@ -726,7 +726,7 @@ Download the gene set file from <a href = "http://software.broadinstitute.org/gs
 
 ```{r}
 #read the geneset file
-pathwaysH <- read.csv("./data/h.all.v7.1.symbols.gmt", sep="\t", header=F, stringsAsFactor=FALSE)
+pathwaysH <- read.csv(paste0(PATH_REFERENCE, "/h.all.v7.4.symbols.gmt"), sep="\t", header=F, stringsAsFactor=FALSE)
 ```
 
 The gene set file needs to be in a specific format so we need to do a little formatting before using the `fgsea()` function:
@@ -753,7 +753,7 @@ But before that, we need to remove duplicate genes in order to keep only distinc
 ranks <- data.frame(ID = rownames(res.int), log2FC = res.int$log2FoldChange)
 idx_match <- match(rownames(res.int), rownames(annot))
 
-ranks$symbol <- toupper(annot$Gene_name[idx_match])
+ranks$symbol <- toupper(annot$GeneName[idx_match])
 ranks <- ranks[order(abs(ranks$log2FC), decreasing = TRUE), ]
 ranks <- distinct(ranks, symbol, .keep_all = TRUE)
 ranks <- ranks[order(ranks$log2FC, decreasing = TRUE), ]
